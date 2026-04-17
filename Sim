@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Luffy Battle Grounds - Anti-Stuck Final</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Arial', sans-serif; touch-action: none; }
+        canvas { display: block; background: #4682B4; width: 100vw; height: 100vh; }
+        #menu { position: absolute; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; z-index: 100; }
+        #landscape-message { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; color: white; z-index: 9999; text-align: center; flex-direction: column; justify-content: center; }
+        @media screen and (orientation: portrait) { #landscape-message { display: flex; } }
+        button { padding: 15px 40px; font-size: 20px; cursor: pointer; background: #f00; color: #fff; border: none; border-radius: 5px; font-weight: bold; }
+        .controls { position: absolute; bottom: 10px; width: 100%; display: flex; justify-content: space-between; padding: 0 10px; box-sizing: border-box; pointer-events: none; z-index: 50; }
+        .joystick-area { width: 90px; height: 90px; background: rgba(255,255,255,0.3); border-radius: 50%; position: relative; pointer-events: auto; border: 2px solid #fff; }
+        .joystick-stick { width: 35px; height: 35px; background: #fff; border-radius: 50%; position: absolute; top: 27px; left: 27px; }
+        .action-btns { display: flex; gap: 5px; pointer-events: auto; align-items: flex-end; flex-wrap: wrap; justify-content: flex-end; width: 250px; }
+        .btn { width: 52px; height: 52px; border-radius: 50%; border: 2px solid #fff; color: white; font-weight: bold; font-size: 8px; text-shadow: 1px 1px black; position: relative; overflow: hidden; }
+        .btn-attack { background: radial-gradient(circle, #ff4500, #8b0000); width: 65px; height: 65px; font-size: 10px; }
+        .btn-bazooka { background: radial-gradient(circle, #8b4513, #2f4f4f); }
+        .btn-gatling { background: radial-gradient(circle, #ffd700, #b8860b); color: #000; text-shadow: none; }
+        .btn-haki { background: radial-gradient(circle, #444, #000); border-color: #666; }
+        .btn-jump { background: radial-gradient(circle, #1e90ff, #00008b); }
+        .btn-dash { background: radial-gradient(circle, #00ced1, #008b8b); }
+        .btn-gear { background: radial-gradient(circle, #ff69b4, #ff1493); border-color: #ffc0cb; }
+        .cooldown-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; font-size: 14px; color: white; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+<div id="landscape-message"><h2>🔄 Gire o celular para jogar</h2></div>
+<div id="menu">
+    <h1 style="color: #ffcc00; -webkit-text-stroke: 1.5px red; font-size: 3em; text-align: center;">LUFFY BATTLE GROUNDS</h1>
+    <button onclick="startGame()">JOGAR</button>
+</div>
+<canvas id="gameCanvas"></canvas>
+<div class="controls" id="ui" style="display: none;">
+    <div class="joystick-area" id="joyArea"><div class="joystick-stick" id="joyStick"></div></div>
+    <div class="action-btns">
+        <button class="btn btn-haki" id="hakiBtn">HAKI</button>
+        <button class="btn btn-gear" id="gearBtn">GEAR 2</button>
+        <button class="btn btn-dash" id="dashBtn">DASH<div id="dashCD" class="cooldown-overlay"></div></button>
+        <button class="btn btn-gatling" id="gatlingBtn">GATLING<div id="gatlingCD" class="cooldown-overlay"></div></button>
+        <button class="btn btn-bazooka" id="bazookaBtn">BAZOOKA<div id="bazookaCD" class="cooldown-overlay"></div></button>
+        <button class="btn btn-jump" id="jumpBtn">PULAR</button>
+        <button class="btn btn-attack" id="attackBtn">PISTOL<div id="pistolCD" class="cooldown-overlay"></div></button>
+    </div>
+</div>
+
+<script>
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playSound(freq, type, duration, vol) {
+    try {
+        const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
+        osc.type = type; osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + duration);
+    } catch(e){}
+}
+
+const canvas = document.getElementById('gameCanvas'); const ctx = canvas.getContext('2d');
+function resize() { 
+    canvas.width = window.innerWidth; 
+    canvas.height = window.innerHeight; 
+}
+window.addEventListener('resize', resize); 
+resize();
+
+let gameRunning = false, gameOver = false, shake = 0, flash = 0;
+const gravity = 0.8;
+let projectiles = [], smokeParticles = [], meteors = [], fireParticles = [], explosions = [];
+
+const luffy = { 
+    x: 100, y: 0, width: 50, height: 75, velX: 0, velY: 0, jumping: false, 
+    health: 975, maxHealth: 975, attacking: false, attackType: '', flip: false, 
+    gearSecond: false, gearTimer: 0, haki: false, gatlingTimer: 0, 
+    pistolOnCD: false, bazookaOnCD: false, gatlingOnCD: false, dashOnCD: false, dashing: 0 
+};
+const akainu = { x: 400, y: 0, width: 60, height: 90, velX: 0, velY: 0, health: 1000, maxHealth: 1000, attackTimer: 0, ultimateActive: false };
+
+function startGame() {
+    audioCtx.resume(); 
+    resize(); // Garante o tamanho correto antes de spawnar
+    document.getElementById('menu').style.display = 'none'; 
+    document.getElementById('ui').style.display = 'flex';
+    
+    // SPAWN FORÇADO E SEGURO (Calculado no clique do botão)
+    luffy.x = canvas.width * 0.2; 
+    luffy.y = canvas.height - 200;
+    akainu.x = canvas.width * 0.7; 
+    akainu.y = canvas.height - 200;
+    
+    gameRunning = true; 
+    gameOver = false; 
+    update();
+}
+
+let moveDir = 0;
+const joyStick = document.getElementById('joyStick');
+document.getElementById('joyArea').addEventListener('touchstart', handleJoy);
+document.getElementById('joyArea').addEventListener('touchmove', handleJoy);
+document.getElementById('joyArea').addEventListener('touchend', () => { joyStick.style.transform = `translate(0px, 0px)`; moveDir = 0; });
+
+function handleJoy(e) {
+    const rect = document.getElementById('joyArea').getBoundingClientRect();
+    const move = Math.max(-40, Math.min(40, e.touches[0].clientX - (rect.left + 45)));
+    joyStick.style.transform = `translateX(${move}px)`;
+    moveDir = move / 40; if(moveDir !== 0) luffy.flip = moveDir < 0;
+}
+
+function startCooldown(type, seconds) {
+    const overlay = document.getElementById(type + 'CD');
+    luffy[type + 'OnCD'] = true; overlay.style.display = 'flex';
+    let timeLeft = seconds; overlay.innerText = timeLeft;
+    const interval = setInterval(() => {
+        timeLeft--;
+        if (timeLeft <= 0) { clearInterval(interval); luffy[type + 'OnCD'] = false; overlay.style.display = 'none'; }
+        else { overlay.innerText = timeLeft; }
+    }, 1000);
+}
+
+function executeAttack(type) {
+    if (luffy.attacking || luffy.dashing > 0) return;
+    if (luffy[type + 'OnCD']) return;
+    if (type === 'dash') { luffy.dashing = 15; startCooldown('dash', 2); playSound(400, 'sine', 0.1, 0.2); return; }
+    luffy.attacking = true; luffy.attackType = type;
+    if (type === 'pistol') {
+        startCooldown('pistol', 3); setTimeout(() => { luffy.attacking = false; luffy.attackType = ''; }, luffy.gearSecond ? 100 : 250);
+        checkHit('pistol');
+    } else if (type === 'bazooka') {
+        startCooldown('bazooka', 4); setTimeout(() => { luffy.attacking = false; luffy.attackType = ''; }, luffy.gearSecond ? 120 : 300);
+        checkHit('bazooka');
+    } else if (type === 'gatling') {
+        luffy.gatlingTimer = 180; setTimeout(() => { luffy.attacking = false; luffy.attackType = ''; startCooldown('gatling', 5); }, 3000);
+    }
+}
+
+function checkHit(type) {
+    let range = type === 'bazooka' ? 220 : 180;
+    let isRedHawk = type === 'pistol' && luffy.gearSecond && luffy.haki;
+    let damage = isRedHawk ? 150 : (type === 'bazooka' ? 40 : 20);
+    if (luffy.haki && !isRedHawk) damage += 20;
+    if (type === 'gatling') damage = luffy.haki ? 10 : 5;
+
+    if (Math.abs(luffy.x - akainu.x) < range && Math.abs(luffy.y - akainu.y) < 100) {
+        akainu.health -= damage;
+        if (isRedHawk) { shake = 60; flash = 10; explosions.push({x: akainu.x + 30, y: akainu.y + 45, r: 10, maxR: 150}); playSound(50, 'sawtooth', 1, 0.6); }
+        else { shake = 10; playSound(80, 'square', 0.2, 0.3); }
+    }
+}
+
+document.getElementById('hakiBtn').addEventListener('touchstart', (e) => { e.preventDefault(); luffy.haki = !luffy.haki; document.getElementById('hakiBtn').style.border = luffy.haki ? "4px solid #f00" : "2px solid #fff"; });
+document.getElementById('attackBtn').addEventListener('touchstart', (e) => { e.preventDefault(); executeAttack('pistol'); });
+document.getElementById('bazookaBtn').addEventListener('touchstart', (e) => { e.preventDefault(); executeAttack('bazooka'); });
+document.getElementById('gatlingBtn').addEventListener('touchstart', (e) => { e.preventDefault(); executeAttack('gatling'); });
+document.getElementById('dashBtn').addEventListener('touchstart', (e) => { e.preventDefault(); executeAttack('dash'); });
+document.getElementById('jumpBtn').addEventListener('touchstart', (e) => { e.preventDefault(); if (!luffy.jumping) { luffy.velY = -17; luffy.jumping = true; } });
+document.getElementById('gearBtn').addEventListener('touchstart', (e) => { e.preventDefault(); if (!luffy.gearSecond) { luffy.gearSecond = true; luffy.gearTimer = 1200; document.getElementById('gearBtn').style.opacity = "0.5"; } });
+
+function drawSkin(char, type) {
+    ctx.save(); ctx.translate(char.x + (char.flip ? char.width : 0), char.y);
+    if(char.flip) ctx.scale(-1, 1);
+    if(type === 'luffy') {
+        const skinColor = luffy.gearSecond ? "#FFB6C1" : "#FFDBAC";
+        ctx.fillStyle = "#104E8B"; ctx.fillRect(12, 55, 10, 15); ctx.fillRect(28, 55, 10, 15);
+        ctx.fillStyle = "#D2B48C"; ctx.fillRect(15, 25, 20, 30);
+        ctx.fillStyle = "#B22222"; ctx.fillRect(10, 25, 8, 30); ctx.fillRect(32, 25, 8, 30);
+        ctx.fillStyle = skinColor; ctx.fillRect(15, 5, 20, 20);
+        ctx.fillStyle = "#E3A857"; ctx.beginPath(); ctx.ellipse(25, 6, 22, 4, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillRect(17, -2, 16, 8); ctx.fillStyle = "#FF0000"; ctx.fillRect(17, 3, 16, 3);
+        if(luffy.haki) { ctx.fillStyle = "#000"; ctx.fillRect(5, 35, 12, 15); ctx.fillRect(33, 35, 12, 15); }
+    } else {
+        ctx.fillStyle = "#FFF"; ctx.beginPath(); ctx.moveTo(-10, 20); ctx.lineTo(70, 20); ctx.lineTo(80, 90); ctx.lineTo(-20, 90); ctx.fill();
+        ctx.fillStyle = "#8B0000"; ctx.fillRect(10, 20, 45, 50);
+        ctx.fillStyle = "#FFDBAC"; ctx.fillRect(20, 0, 25, 25);
+        ctx.fillStyle = "#FFF"; ctx.fillRect(15, -5, 35, 10);
+    }
+    ctx.restore();
+}
+
+function update() {
+    if (!gameRunning || gameOver) return;
+    if (shake > 0) shake *= 0.9;
+    ctx.save(); ctx.translate((Math.random()-0.5)*shake, (Math.random()-0.5)*shake); ctx.clearRect(-100, -100, canvas.width+200, canvas.height+200);
+    
+    ctx.fillStyle = "#E0FFFF"; ctx.fillRect(0, canvas.height-60, canvas.width, 60);
+
+    // MOVIMENTAÇÃO E LIMITES (ANTI-STUCK)
+    if (luffy.dashing > 0) { luffy.x += luffy.flip ? -22 : 22; luffy.dashing--; }
+    else if (luffy.attackType !== 'gatling') { luffy.x += moveDir*(luffy.gearSecond?12:7); }
+    
+    // Trava de Borda Luffy Direta
+    if (luffy.x < 10) luffy.x = 10;
+    if (luffy.x > canvas.width - 60) luffy.x = canvas.width - 60;
+
+    luffy.y += luffy.velY; luffy.velY += gravity; 
+    if(luffy.y > canvas.height-135){ luffy.y=canvas.height-135; luffy.jumping=false; luffy.velY=0; }
+
+    akainu.x += (luffy.x-akainu.x>0?1.5:-1.5)*2;
+    if (akainu.x < 10) akainu.x = 10; if (akainu.x > canvas.width - 70) akainu.x = canvas.width - 70;
+    akainu.y+=akainu.velY; akainu.velY+=gravity; if(akainu.y > canvas.height-150){ akainu.y=canvas.height-150; akainu.velY=0; }
+    
+    drawSkin(luffy, 'luffy'); drawSkin(akainu, 'akainu');
+    
+    if(luffy.attacking){
+        const rh = luffy.attackType === 'pistol' && luffy.gearSecond && luffy.haki;
+        ctx.fillStyle = rh ? "#ff4500" : (luffy.haki ? "#000" : "#FFDBAC");
+        const armLen = luffy.gearSecond ? 220 : 140; const armX = luffy.flip ? luffy.x - armLen + 10 : luffy.x + 40;
+        if (luffy.attackType === 'gatling') {
+            luffy.gatlingTimer--; if (luffy.gatlingTimer % (luffy.gearSecond ? 5 : 10) === 0) checkHit('gatling');
+            for(let i=0; i<3; i++) ctx.fillRect(armX, luffy.y + 10 + Math.random()*40, armLen, 10);
+        } else { ctx.fillRect(armX, luffy.y + 30, armLen, rh ? 25 : 12); }
+    }
+
+    explosions.forEach((e, i) => { e.r += 10; ctx.fillStyle = `rgba(255, 255, 255, ${1 - e.r/e.maxR})`; ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, Math.PI*2); ctx.fill(); if(e.r >= e.maxR) explosions.splice(i, 1); });
+    
+    ctx.fillStyle="red"; ctx.fillRect(20,20,200,15); ctx.fillStyle="#0F0"; ctx.fillRect(20,20,(luffy.health/975)*200,15);
+    ctx.fillStyle="red"; ctx.fillRect(canvas.width-220,20,200,15); ctx.fillStyle="#0F0"; ctx.fillRect(canvas.width-220,20,(akainu.health/1000)*200,15);
+    
+    if (flash > 0) { ctx.fillStyle = `rgba(255,255,255,${flash/10})`; ctx.fillRect(0,0,canvas.width,canvas.height); flash--; }
+    ctx.restore();
+    if(luffy.health<=0 || akainu.health <= 0){ gameOver=true; setTimeout(() => { alert(luffy.health<=0?"DERROTA":"VITÓRIA"); location.reload(); }, 100); } else { requestAnimationFrame(update); }
+}
+</script>
+</body>
+</html>
